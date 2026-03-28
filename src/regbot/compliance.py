@@ -6,8 +6,13 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from src.regbot.config import DEFAULT_LLM_MODEL
-from src.regbot.grounding import allowed_chunk_ids, audit_citation_grounding
+from src.regbot.config import DEFAULT_LLM_MODEL, MIN_TOKEN_OVERLAP
+from src.regbot.grounding import (
+    allowed_chunk_ids,
+    audit_report_grounding,
+    filter_recommendations_by_token_overlap,
+    normalize_recommendations,
+)
 
 
 def _format_evidence(chunks: List[Dict[str, Any]], max_chars: int = 12000) -> str:
@@ -35,7 +40,7 @@ def _fallback_report(
     *,
     grounding_strict: bool = True,
 ) -> Dict[str, Any]:
-    """Heuristic output when no LLM key is available; still ties claims to chunk ids."""
+    """Heuristic output when no LLM key is available; ties each recommendation to chunk ids."""
     consent_l = consent.lower()
     keywords = [
         "secondary use",
@@ -49,23 +54,31 @@ def _fallback_report(
     ]
     missing = [k for k in keywords if k not in consent_l]
     status = "Partially Compliant" if len(missing) <= 3 else "Non-Compliant"
-    citations = []
+    ids_pool = [str(c["id"]) for c in chunks if c.get("id")]
+    texts = [
+        "Add explicit language on permitted secondary uses and any restrictions.",
+        "Clarify withdrawal of consent and what happens to already-shared data.",
+        "State whether data may be stored or processed outside the original jurisdiction.",
+    ]
+    recommendations: List[Dict[str, Any]] = []
+    for i, t in enumerate(texts):
+        ev = [ids_pool[i % len(ids_pool)]] if ids_pool else []
+        recommendations.append({"text": t, "evidence_chunk_ids": ev})
+
+    citations: List[Dict[str, str]] = []
     for c in chunks[:5]:
         citations.append(
             {
-                "chunk_id": c["id"],
+                "chunk_id": str(c["id"]),
                 "reason": "Retrieved as potentially relevant policy context.",
             }
         )
-    out = {
+
+    out: Dict[str, Any] = {
         "study_type": study_type,
         "status": status,
         "missing_elements": missing,
-        "recommendations": [
-            "Add explicit language on permitted secondary uses and any restrictions.",
-            "Clarify withdrawal of consent and what happens to already-shared data.",
-            "State whether data may be stored or processed outside the original jurisdiction.",
-        ],
+        "recommendations": recommendations,
         "citations": citations,
         "notes": (
             "LLM analysis disabled (no OPENAI_API_KEY). "
@@ -73,11 +86,17 @@ def _fallback_report(
         ),
     }
     allow = allowed_chunk_ids(chunks)
-    out["grounding"] = audit_citation_grounding(
+    out["grounding"] = audit_report_grounding(
         out,
         allow,
-        strict_min_citations_vs_recommendations=grounding_strict,
+        require_evidence_per_recommendation=grounding_strict,
+        validate_supplementary_citations=True,
     )
+    # Offline path: do not apply token-overlap drops (generic text may not lexically match policy).
+    out["grounding"]["overlap"] = {
+        "skipped": True,
+        "reason": "Keyword fallback does not apply REGBOT_MIN_TOKEN_OVERLAP filtering.",
+    }
     out["grounding_attempts"] = 1
     return out
 
@@ -91,18 +110,36 @@ def analyze_compliance(
     model: Optional[str] = None,
     max_grounding_retries: int = 1,
     grounding_strict: bool = True,
+    min_token_overlap: Optional[float] = None,
 ) -> Dict[str, Any]:
+    overlap_floor = MIN_TOKEN_OVERLAP if min_token_overlap is None else float(min_token_overlap)
+
     if not chunks:
-        return {
+        empty: Dict[str, Any] = {
             "study_type": study_type,
             "status": "Unknown",
             "missing_elements": [],
             "recommendations": [
-                "Ingest at least one GA4GH policy document into the local store before checking compliance."
+                {
+                    "text": (
+                        "Ingest at least one GA4GH policy document into the local store "
+                        "before checking compliance."
+                    ),
+                    "evidence_chunk_ids": [],
+                }
             ],
             "citations": [],
             "notes": "No retrieved policy context.",
+            "grounding": {
+                "ok": False,
+                "issues": ["No retrieved chunks; evidence_chunk_ids cannot be grounded."],
+                "allowed_chunk_count": 0,
+                "recommendation_count": 1,
+                "invalid_evidence_chunk_ids": [],
+            },
+            "grounding_attempts": 0,
         }
+        return empty
 
     if not api_key:
         return _fallback_report(
@@ -121,10 +158,16 @@ def analyze_compliance(
         "You are a research compliance assistant for genomic data sharing. "
         "You must only use the POLICY EXCERPTS block as evidence. "
         "If the excerpts do not contain enough information, say so explicitly. "
-        "Every recommendation must have supporting citations. "
-        "Each citations[].chunk_id MUST be copied exactly from a [chunk_id=...] header in POLICY EXCERPTS "
-        "(no invented ids). "
-        "Return JSON only, no markdown."
+        "Return JSON only, no markdown. "
+        "Each recommendation MUST be an object with keys: "
+        '"text" (string) and "evidence_chunk_ids" (array of strings). '
+        "Every string in evidence_chunk_ids MUST be copied exactly from a "
+        "[chunk_id=...] header in POLICY EXCERPTS (no invented ids). "
+        "Each recommendation must have at least one evidence_chunk_id. "
+        "Write recommendation text so its wording substantially overlaps the vocabulary "
+        "of the cited excerpts (shared terms/phrases), not generic boilerplate unrelated to those chunks. "
+        "Optional: citations (array of {chunk_id, reason}) for extra references; "
+        "those chunk_id values must also satisfy the same allow-list."
     )
     base_user = (
         f"STUDY_TYPE_GUESS: {study_type}\n\n"
@@ -132,11 +175,10 @@ def analyze_compliance(
         f"CONSENT_OR_DATA_USE_TEXT:\n{consent_text.strip()}\n\n"
         "Return a JSON object with keys: "
         "study_type (string), status (one of: Compliant, Partially Compliant, Non-Compliant, Unknown), "
-        "missing_elements (array of strings), recommendations (array of strings), "
-        "citations (array of objects with chunk_id, reason), "
-        "notes (optional string). "
-        "Use at least as many citations as recommendations; each citation.chunk_id must be in the allow-list "
-        "implied by the excerpt headers."
+        "missing_elements (array of strings), "
+        "recommendations (array of objects, each with text and evidence_chunk_ids), "
+        "citations (optional array of objects with chunk_id, reason), "
+        "notes (optional string)."
     )
 
     suffix = ""
@@ -166,35 +208,82 @@ def analyze_compliance(
             "study_type": str(data.get("study_type", study_type)),
             "status": str(data.get("status", "Unknown")),
             "missing_elements": list(data.get("missing_elements") or []),
-            "recommendations": list(data.get("recommendations") or []),
+            "recommendations": normalize_recommendations(data.get("recommendations")),
             "citations": list(data.get("citations") or []),
         }
         if data.get("notes"):
             out["notes"] = str(data["notes"])
         out["model"] = model_name
 
-        audit = audit_citation_grounding(
+        audit = audit_report_grounding(
             out,
             allow,
-            strict_min_citations_vs_recommendations=grounding_strict,
+            require_evidence_per_recommendation=grounding_strict,
+            validate_supplementary_citations=True,
         )
-        out["grounding"] = audit
-        out["grounding_attempts"] = attempts
-        if audit["ok"] or attempts >= max_attempts:
-            if not audit["ok"]:
+
+        if not audit["ok"]:
+            out["grounding"] = audit
+            out["grounding_attempts"] = attempts
+            if attempts >= max_attempts:
                 note = (
                     " Model output failed programmatic citation grounding checks after retries; "
                     "treat recommendations as ungrounded."
                 )
                 out["notes"] = (out.get("notes") or "") + note
-            return out
+                return out
+            suffix = (
+                "\n\nGROUNDING_FIX_REQUIRED:\n"
+                + "\n".join(f"- {issue}" for issue in audit["issues"])
+                + "\nAllowed chunk_id values (copy exactly into evidence_chunk_ids):\n"
+                + json.dumps(sorted(allow))
+                + "\nReturn the full JSON object again. "
+                "Each recommendations[] item must include non-empty evidence_chunk_ids "
+                "from that allow-list."
+            )
+            continue
 
-        suffix = (
-            "\n\nGROUNDING_FIX_REQUIRED:\n"
-            + "\n".join(f"- {issue}" for issue in audit["issues"])
-            + "\nAllowed chunk_id values (copy exactly):\n"
-            + json.dumps(sorted(allow))
-            + "\nReturn the full JSON object again with corrected citations."
+        filt, ometa = filter_recommendations_by_token_overlap(
+            out["recommendations"],
+            chunks,
+            min_overlap=overlap_floor,
         )
+        out["recommendations"] = filt
+        merged = dict(audit)
+        merged["recommendation_count"] = len(filt)
+        merged["overlap"] = ometa
+        out["grounding"] = merged
+
+        dropped_all = bool(ometa.get("dropped_all")) and overlap_floor > 0
+        if dropped_all:
+            issues = list(merged.get("issues", []))
+            issues.append(
+                "All recommendations removed: token overlap between recommendation text and "
+                f"cited chunk text is below threshold ({overlap_floor}). "
+                "Rewrite each recommendation to use wording aligned with the cited excerpts."
+            )
+            merged["issues"] = issues
+            merged["ok"] = False
+            out["grounding"] = merged
+            out["grounding_attempts"] = attempts
+            if attempts >= max_attempts:
+                out["notes"] = (
+                    out.get("notes", "")
+                    + " Recommendations failed token-overlap checks after retries."
+                )
+                return out
+            suffix = (
+                "\n\nTOKEN_OVERLAP_FIX_REQUIRED:\n"
+                f"- Minimum token recall vs cited chunks: {overlap_floor}\n"
+                "- Paraphrase the cited excerpt ideas using overlapping terms/phrases from those excerpts.\n"
+                "- Keep evidence_chunk_ids pointing to the chunks your text is grounded in.\n"
+                "Return the full JSON object again."
+            )
+            continue
+
+        merged["ok"] = True
+        out["grounding"] = merged
+        out["grounding_attempts"] = attempts
+        return out
 
     return out

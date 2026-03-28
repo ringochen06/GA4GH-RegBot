@@ -18,6 +18,7 @@ class TestRegBotSmoke(unittest.TestCase):
         report = bot.check_compliance("short consent text about genomics and sharing")
         self.assertIsInstance(report, dict)
         self.assertIn("status", report)
+        self.assertIn("grounding", report)
 
 
 if __name__ == "__main__":

@@ -22,8 +22,8 @@ class HybridRetriever:
         self.store_dir = store_dir
         self.collection_name = collection_name
         self.embedding_model_name = embedding_model_name
-        self._model = None
-        self._collection = None
+        self._model: Any = None
+        self._collection: Any = None
         self._by_id: Dict[str, Dict[str, Any]] = {}
         self._bm25: Optional[BM25Okapi] = None
         self._bm25_ids: List[str] = []
@@ -53,7 +53,7 @@ class HybridRetriever:
             self._bm25 = None
 
     @property
-    def model(self):
+    def model(self) -> Any:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
@@ -89,7 +89,8 @@ class HybridRetriever:
             n_results=min(semantic_candidates, len(self._by_id)),
             include=["documents", "metadatas", "distances"],
         )
-        sem_ids: List[str] = list(sem["ids"][0]) if sem.get("ids") else []
+        ids_raw = sem.get("ids")
+        sem_ids: List[str] = list(ids_raw[0]) if ids_raw else []
         sem_ids = [i for i in sem_ids if passes_filter(i)]
 
         bm25_ids: List[str] = []

@@ -30,7 +30,9 @@ with st.sidebar:
         value=os.getenv("REGBOT_STORE", "./data/regbot_store"),
         help="Where Chroma + manifest.json are written.",
     )
-    st.markdown("Set `OPENAI_API_KEY` locally for full LLM JSON analysis; otherwise a heuristic fallback runs.")
+    st.markdown(
+        "Set `OPENAI_API_KEY` locally for full LLM JSON analysis; otherwise a heuristic fallback runs."
+    )
 
 tab_ingest, tab_check = st.tabs(["Ingest policy", "Check consent"])
 
@@ -50,7 +52,9 @@ with tab_ingest:
                 reset=reset,
                 category=category.strip() or None,
             )
-            st.success("Ingest finished." if ok else "Ingest reported a problem (see terminal/logs).")
+            st.success(
+                "Ingest finished." if ok else "Ingest reported a problem (see terminal/logs)."
+            )
         finally:
             try:
                 os.remove(tmp_path)

@@ -1,5 +1,5 @@
 GA4GH-RegBot: Compliance Assistant
-Status: Proposal Stage for GSoC 2026
+Status: **MVP available** — ingest, hybrid retrieval, optional LLM compliance + programmatic citation checks, CLI, Streamlit, and a small PDF eval harness. Ongoing work: real-corpus evaluation, stricter schemas, and contributor tooling.
 
 Overview
 RegBot is an LLM-powered tool designed to help researchers map their consent forms against GA4GH regulatory frameworks. It uses RAG (Retrieval-Augmented Generation) to flag compliance gaps automatically.
@@ -10,7 +10,7 @@ What works today
 - **Compliance pass**: one OpenAI JSON call when `OPENAI_API_KEY` is set; otherwise a small keyword gap heuristic that still returns chunk citations.
 - **Streamlit UI** for upload + paste flows (`src/streamlit_app.py`).
 - **CLI**: `python -m src.main …` (see below).
-- **Citation grounding (programmatic):** LLM JSON is checked so every `citations[].chunk_id` is in the retrieved evidence set; by default citations must be at least as numerous as recommendations. Failed checks trigger **one automatic rewrite request** to the model with the allow-list of ids.
+- **Citation grounding (programmatic):** Each `recommendations[]` item must be `{ "text": "...", "evidence_chunk_ids": ["..."] }` with ids taken **only** from retrieved chunks; optional `citations[]` must also respect the same allow-list. Failed checks trigger **one automatic rewrite request** with the allow-list.
 - **PDF eval harness:** `eval` subcommand ingests a real GA4GH PDF and prints retrieval hits for built-in or custom queries (for manual review / building a gold set later).
 
 Quickstart (Development)
@@ -80,6 +80,7 @@ Environment Variables
 - `OPENAI_API_KEY`: Optional; enables the JSON LLM compliance pass via `REGBOT_LLM_MODEL` (default `gpt-4o-mini`).
 - `REGBOT_STORE`: Optional override for the on-disk store directory (default `./data/regbot_store`).
 - `REGBOT_EMBEDDING_MODEL`: Optional SentenceTransformers model id (default `sentence-transformers/all-MiniLM-L6-v2`).
+- `REGBOT_MIN_TOKEN_OVERLAP`: For the LLM path, minimum **token recall** between each recommendation and the cited chunk texts (default `0.06`). Set to `0` to disable dropping rows for low overlap (scores may still be attached).
 
 Architecture (implemented vs planned)
 - **Core:** Python 3, modular package under `src/regbot/` (ingest, hybrid retrieval, compliance).
@@ -88,11 +89,14 @@ Architecture (implemented vs planned)
 - **Retrieval:** cosine similarity in Chroma + `rank-bm25`, fused via reciprocal rank fusion; optional metadata category filter.
 - **LLM:** OpenAI Chat Completions JSON mode when `OPENAI_API_KEY` is set; offline keyword-style fallback otherwise.
 - **UI:** Streamlit (`src/streamlit_app.py`).
-- **Also listed for roadmap:** deeper LangChain/LlamaIndex integration, richer evaluation, and stronger citation QA.
+- **Optional / roadmap:** optional LangChain/LlamaIndex adapters on top of the same stores; richer offline evaluation (Ragas, human labels); structured per-recommendation evidence fields.
 
-Roadmap
-Phase 1: Ingest GA4GH "Framework for Responsible Sharing" policy documents.
+Next steps (suggested priorities)
+1. **Real GA4GH corpus**: ingest official PDFs, tune chunk size/overlap and hybrid fusion weights using `eval` + a small **gold query → chunk_id** list (manual or semi-automated).
+2. **Stricter outputs (done for recommendations):** each item now carries `evidence_chunk_ids[]`; **next:** optional quote-overlap checks against chunk text, or refuse to emit a recommendation if no chunk supports it.
+3. **Contributor experience**: **Done in-repo:** separate **Lint** workflow (Ruff check + format check), `CONTRIBUTING.md`, `.pre-commit-config.yaml`, `pyproject.toml`, `requirements-dev.txt`. **Still open:** `mypy`, broader type hints, optional Black-only rules if the team wants them.
+4. **Operational hardening**: optional Chroma telemetry off via env, retry/backoff for OpenAI, and clearer error messages when PDF text extraction is empty.
 
-Phase 2: Build RAG pipeline for clause extraction.
-
-Phase 3: Develop Streamlit frontend for user uploads.
+Contributing
+- See **`CONTRIBUTING.md`** for venv setup, **Ruff** lint/format, optional **pre-commit**, and tests.
+- Open PRs against the upstream repo; keep changes scoped and tested (`python -m unittest discover -s tests -p "test*.py" -v`). Do not commit `.env`, API keys, or local `data/regbot_store/`.

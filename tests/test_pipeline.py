@@ -31,8 +31,15 @@ class _FakeSentenceTransformer:
 class TestRegBotPipeline(unittest.TestCase):
     @patch("sentence_transformers.SentenceTransformer", _FakeSentenceTransformer)
     def test_ingest_retrieve_check_smoke(self) -> None:
-        policy = Path(__file__).resolve().parents[1] / "examples" / "data" / "sample_ga4gh_policy_stub.txt"
-        consent = Path(__file__).resolve().parents[1] / "examples" / "data" / "sample_consent_short.txt"
+        policy = (
+            Path(__file__).resolve().parents[1]
+            / "examples"
+            / "data"
+            / "sample_ga4gh_policy_stub.txt"
+        )
+        consent = (
+            Path(__file__).resolve().parents[1] / "examples" / "data" / "sample_consent_short.txt"
+        )
         self.assertTrue(policy.is_file(), "missing examples/data sample policy file")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -45,6 +52,11 @@ class TestRegBotPipeline(unittest.TestCase):
                 report = bot.check_compliance(f.read(), top_k=6)
             self.assertIn("status", report)
             self.assertIn("citations", report)
+            self.assertIsInstance(report["recommendations"], list)
+            self.assertGreater(len(report["recommendations"]), 0)
+            self.assertIn("text", report["recommendations"][0])
+            self.assertIn("evidence_chunk_ids", report["recommendations"][0])
+            self.assertIn("grounding", report)
 
 
 if __name__ == "__main__":
