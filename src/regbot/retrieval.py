@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional
 
 from rank_bm25 import BM25Okapi
 
-from src.regbot.config import CHROMA_SUBDIR, DEFAULT_COLLECTION, DEFAULT_EMBEDDING_MODEL
+from src.regbot.config import (
+    CHROMA_SUBDIR,
+    DEFAULT_COLLECTION,
+    DEFAULT_EMBEDDING_MODEL,
+    chromadb_settings,
+)
 from src.regbot.fusion import reciprocal_rank_fusion
 from src.regbot.ingestion import read_manifest
 from src.regbot.text_utils import tokenize
@@ -36,7 +41,7 @@ class HybridRetriever:
         chroma_path = os.path.join(self.store_dir, CHROMA_SUBDIR)
         if not os.path.isdir(chroma_path):
             return
-        client = chromadb.PersistentClient(path=chroma_path)
+        client = chromadb.PersistentClient(path=chroma_path, settings=chromadb_settings())
         try:
             self._collection = client.get_collection(self.collection_name)
         except Exception:

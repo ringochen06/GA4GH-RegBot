@@ -12,6 +12,7 @@ from src.regbot.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBEDDING_MODEL,
     MANIFEST_NAME,
+    chromadb_settings,
 )
 from src.regbot.text_utils import chunk_text
 
@@ -88,7 +89,7 @@ def ingest_policy_file(
     os.makedirs(store_dir, exist_ok=True)
     chroma_dir = _chroma_path(store_dir)
 
-    client = chromadb.PersistentClient(path=chroma_dir)
+    client = chromadb.PersistentClient(path=chroma_dir, settings=chromadb_settings())
     if reset:
         try:
             client.delete_collection(collection_name)
@@ -102,6 +103,7 @@ def ingest_policy_file(
     base_category = category or os.path.splitext(os.path.basename(file_path))[0]
 
     new_records: List[Dict[str, Any]] = []
+    ext = os.path.splitext(file_path)[1].lower()
     pages = load_document_pages(file_path)
     chunk_idx = 0
     for page_text, page_num in pages:
@@ -122,6 +124,14 @@ def ingest_policy_file(
             )
 
     if not new_records:
+        if ext == ".pdf":
+            total_chars = sum(len((t or "").strip()) for t, _ in pages)
+            if total_chars == 0:
+                raise ValueError(
+                    "No extractable text from this PDF (0 characters after stripping). "
+                    "The file may be scanned images only, encrypted, or corrupt; try OCR, "
+                    "another PDF export, or a text-based source."
+                )
         write_manifest(store_dir, existing)
         return 0
 

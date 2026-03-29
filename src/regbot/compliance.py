@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from src.regbot.config import DEFAULT_LLM_MODEL, MIN_TOKEN_OVERLAP
+from src.regbot.config import DEFAULT_LLM_MODEL, MIN_TOKEN_OVERLAP, OPENAI_MAX_RETRIES
 from src.regbot.grounding import (
     allowed_chunk_ids,
     audit_report_grounding,
@@ -152,7 +152,7 @@ def analyze_compliance(
     allow = allowed_chunk_ids(chunks)
     evidence = _format_evidence(chunks)
     model_name = model or DEFAULT_LLM_MODEL
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, max_retries=OPENAI_MAX_RETRIES)
 
     system = (
         "You are a research compliance assistant for genomic data sharing. "

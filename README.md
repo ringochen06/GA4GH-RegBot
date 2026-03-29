@@ -81,6 +81,8 @@ Environment Variables
 - `REGBOT_STORE`: Optional override for the on-disk store directory (default `./data/regbot_store`).
 - `REGBOT_EMBEDDING_MODEL`: Optional SentenceTransformers model id (default `sentence-transformers/all-MiniLM-L6-v2`).
 - `REGBOT_MIN_TOKEN_OVERLAP`: For the LLM path, minimum **token recall** between each recommendation and the cited chunk texts (default `0.06`). Set to `0` to disable dropping rows for low overlap (scores may still be attached).
+- `REGBOT_CHROMA_ANONYMIZED_TELEMETRY`: Set to `1` to enable Chroma client telemetry; default is off (`0`).
+- `REGBOT_OPENAI_MAX_RETRIES`: Maximum retries for transient OpenAI API errors (default `3`).
 
 Architecture (implemented vs planned)
 - **Core:** Python 3, modular package under `src/regbot/` (ingest, hybrid retrieval, compliance).
@@ -93,9 +95,9 @@ Architecture (implemented vs planned)
 
 Next steps (suggested priorities)
 1. **Real GA4GH corpus**: ingest official PDFs, tune chunk size/overlap and hybrid fusion weights using `eval` + a small **gold query → chunk_id** list (manual or semi-automated).
-2. **Stricter outputs (done for recommendations):** each item now carries `evidence_chunk_ids[]`; **next:** optional quote-overlap checks against chunk text, or refuse to emit a recommendation if no chunk supports it.
-3. **Contributor experience**: **Done in-repo:** separate **Lint** workflow (Ruff check + format check), `CONTRIBUTING.md`, `.pre-commit-config.yaml`, `pyproject.toml`, `requirements-dev.txt`. **Still open:** `mypy`, broader type hints, optional Black-only rules if the team wants them.
-4. **Operational hardening**: optional Chroma telemetry off via env, retry/backoff for OpenAI, and clearer error messages when PDF text extraction is empty.
+2. **Stricter outputs:** `evidence_chunk_ids[]` plus programmatic ID checks, token-overlap filtering on the LLM path (`REGBOT_MIN_TOKEN_OVERLAP`), and retries when grounding/overlap fails. **Next:** richer evidence objects (e.g. optional quotes), stricter refusal when excerpts are insufficient.
+3. **Contributor experience**: **Done in-repo:** separate **Lint** workflow (Ruff check + format check), `CONTRIBUTING.md`, `.pre-commit-config.yaml`, `pyproject.toml`, `requirements-dev.txt`. **Still open:** optional CI `mypy`, broader type hints, Black-only rules if the team wants them.
+4. **Operational hardening**: **Done in-repo:** Chroma telemetry off by default (`REGBOT_CHROMA_ANONYMIZED_TELEMETRY`), OpenAI client `max_retries` via `REGBOT_OPENAI_MAX_RETRIES`, clear `ValueError` when a PDF yields no extractable text. **Next:** optional request timeouts, Chroma/OpenAI observability hooks.
 
 Contributing
 - See **`CONTRIBUTING.md`** for venv setup, **Ruff** lint/format, optional **pre-commit**, and tests.
