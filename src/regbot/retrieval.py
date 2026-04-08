@@ -11,6 +11,7 @@ from src.regbot.config import (
     DEFAULT_EMBEDDING_MODEL,
     chromadb_settings,
 )
+from src.regbot.embeddings import load_sentence_transformer
 from src.regbot.fusion import reciprocal_rank_fusion
 from src.regbot.ingestion import read_manifest
 from src.regbot.text_utils import tokenize
@@ -60,9 +61,7 @@ class HybridRetriever:
     @property
     def model(self) -> Any:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-
-            self._model = SentenceTransformer(self.embedding_model_name)
+            self._model = load_sentence_transformer(self.embedding_model_name)
         return self._model
 
     def is_ready(self) -> bool:

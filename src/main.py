@@ -24,7 +24,8 @@ from src.regbot.study_type import detect_study_type
 class RegBot:
     """
     GA4GH-oriented compliance assistant: ingest policy text, retrieve hybrid context,
-    then analyze consent / data-use language with optional OpenAI JSON output.
+    then analyze consent / data-use language with optional LLM JSON output
+    (OpenAI API or local Ollama: Llama 3, Mistral, etc.).
     """
 
     def __init__(
@@ -183,7 +184,11 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="GA4GH-RegBot: ingest policy docs and check consent text.",
+        description=(
+            "GA4GH-RegBot: ingest policy docs and check consent text. "
+            "LLM defaults to local Ollama (see README); set REGBOT_LLM_PROVIDER=openai and "
+            "OPENAI_API_KEY for OpenAI."
+        ),
     )
     p.add_argument(
         "--store",

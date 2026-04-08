@@ -14,6 +14,7 @@ from src.regbot.config import (
     MANIFEST_NAME,
     chromadb_settings,
 )
+from src.regbot.embeddings import load_sentence_transformer
 from src.regbot.text_utils import chunk_text
 
 
@@ -135,9 +136,7 @@ def ingest_policy_file(
         write_manifest(store_dir, existing)
         return 0
 
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(embedding_model_name)
+    model = load_sentence_transformer(embedding_model_name)
     texts = [r["text"] for r in new_records]
     embeddings = model.encode(texts, normalize_embeddings=True).tolist()
 

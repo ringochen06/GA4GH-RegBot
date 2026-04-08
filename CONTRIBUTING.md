@@ -21,6 +21,8 @@ pre-commit install
 
 Run `pre-commit run --all-files` before pushing if you use the hook.
 
+Unit tests do **not** require Ollama or `OPENAI_API_KEY`; the pipeline test forces the offline path.
+
 ## Tests
 
 ```bash

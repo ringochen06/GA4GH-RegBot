@@ -1,5 +1,5 @@
 GA4GH-RegBot: Compliance Assistant
-Status: **MVP available** — ingest, hybrid retrieval, optional LLM compliance + programmatic citation checks, CLI, Streamlit, and a small PDF eval harness. Ongoing work: real-corpus evaluation, stricter schemas, and contributor tooling.
+Status: **MVP available** — ingest, hybrid retrieval, **local-first LLM** (Ollama / Llama 3 by default) or optional OpenAI, programmatic citation checks, CLI, Streamlit, and a small PDF eval harness. Ongoing work: real-corpus evaluation, stricter evidence objects, and contributor tooling.
 
 Overview
 RegBot is an LLM-powered tool designed to help researchers map their consent forms against GA4GH regulatory frameworks. It uses RAG (Retrieval-Augmented Generation) to flag compliance gaps automatically.
@@ -7,10 +7,10 @@ RegBot is an LLM-powered tool designed to help researchers map their consent for
 What works today
 - **Ingest** policy PDFs or `.txt` files into a local **Chroma** store plus a JSON manifest (chunk ids, page hints, source metadata).
 - **Hybrid retrieval**: embedding search + **BM25**, merged with reciprocal rank fusion.
-- **Compliance pass**: one OpenAI JSON call when `OPENAI_API_KEY` is set; otherwise a small keyword gap heuristic that still returns chunk citations.
+- **Compliance pass**: JSON-mode LLM via **[Ollama](https://ollama.com) by default** (e.g. `llama3`, configurable with `REGBOT_OLLAMA_MODEL`). Set `REGBOT_LLM_PROVIDER=openai` and `OPENAI_API_KEY` to use OpenAI instead. If no LLM is reachable (or on API failure), a **keyword heuristic fallback** still returns grounded chunk ids.
 - **Streamlit UI** for upload + paste flows (`src/streamlit_app.py`).
 - **CLI**: `python -m src.main …` (see below).
-- **Citation grounding (programmatic):** Each `recommendations[]` item must be `{ "text": "...", "evidence_chunk_ids": ["..."] }` with ids taken **only** from retrieved chunks; optional `citations[]` must also respect the same allow-list. Failed checks trigger **one automatic rewrite request** with the allow-list.
+- **Citation grounding (programmatic):** Each `recommendations[]` item must be `{ "text": "...", "evidence_chunk_ids": ["..."] }` with ids taken **only** from retrieved chunks; optional `citations[]` must also respect the same allow-list. Failed checks trigger **automatic rewrite requests** with the allow-list; optional **token-overlap** filtering on the LLM path (`REGBOT_MIN_TOKEN_OVERLAP`).
 - **PDF eval harness:** `eval` subcommand ingests a real GA4GH PDF and prints retrieval hits for built-in or custom queries (for manual review / building a gold set later).
 
 Quickstart (Development)
@@ -27,6 +27,12 @@ python -m pip install -r requirements.txt
 - Configure environment variables:
   - Export variables in your shell (recommended)
   - If you use a local `.env`, keep it private and do not commit it
+
+- **LLM (default: local Ollama)**  
+  Install [Ollama](https://ollama.com), run `ollama pull llama3` (or another tag you set in `REGBOT_OLLAMA_MODEL`), and keep the daemon running (`ollama serve` or `brew services start ollama` on macOS). No `OPENAI_API_KEY` is required for this path.
+
+- **Embeddings (first ingest)**  
+  The embedding model is downloaded from Hugging Face on first use. If downloads are slow or fail, try a longer timeout (`HF_HUB_DOWNLOAD_TIMEOUT`, seconds) or a mirror (`REGBOT_HF_ENDPOINT=https://hf-mirror.com` — sets `HF_ENDPOINT` for the Hub client).
 
 - Ingest a policy file into `./data/regbot_store` (use `--reset` when reloading the same corpus):
 
@@ -51,6 +57,8 @@ python -m streamlit run src/streamlit_app.py
 ```bash
 python examples/run_demo.py
 ```
+
+More detail: **`examples/DEMO.md`**.
 
 Evaluate retrieval on a **real** GA4GH PDF (resets the store by default if you pass `--reset`):
 
@@ -77,27 +85,33 @@ python -m unittest discover -s tests -p "test*.py" -v
 ```
 
 Environment Variables
-- `OPENAI_API_KEY`: Optional; enables the JSON LLM compliance pass via `REGBOT_LLM_MODEL` (default `gpt-4o-mini`).
-- `REGBOT_STORE`: Optional override for the on-disk store directory (default `./data/regbot_store`).
-- `REGBOT_EMBEDDING_MODEL`: Optional SentenceTransformers model id (default `sentence-transformers/all-MiniLM-L6-v2`).
-- `REGBOT_MIN_TOKEN_OVERLAP`: For the LLM path, minimum **token recall** between each recommendation and the cited chunk texts (default `0.06`). Set to `0` to disable dropping rows for low overlap (scores may still be attached).
+- `REGBOT_LLM_PROVIDER`: **`ollama` (default)** — local LLM via Ollama’s OpenAI-compatible HTTP API (no OpenAI key). Set to **`openai`** to use OpenAI’s hosted API instead.
+- `OPENAI_API_KEY`: Required only when `REGBOT_LLM_PROVIDER=openai`. Model: `REGBOT_LLM_MODEL` (default `gpt-4o-mini`).
+- `REGBOT_OLLAMA_MODEL`: Tag known to Ollama (default `llama3`). Examples: `llama3`, `mistral`, `mistral:latest`.
+- `REGBOT_OLLAMA_BASE_URL`: Ollama HTTP host only (default `http://127.0.0.1:11434`); `/v1` is appended automatically for the OpenAI-compatible routes.
+- `REGBOT_OLLAMA_API_KEY`: Sent as the Bearer/API key to Ollama’s shim (default `ollama`; ignored by Ollama).
+- `REGBOT_STORE`: On-disk store directory (default `./data/regbot_store`).
+- `REGBOT_EMBEDDING_MODEL`: SentenceTransformers model id (default `sentence-transformers/all-MiniLM-L6-v2`).
+- `HF_HUB_DOWNLOAD_TIMEOUT`: Hugging Face Hub download timeout in seconds (embedding model on first use). The app sets a higher default when unset; increase if you see read timeouts.
+- `REGBOT_HF_ENDPOINT`: If set, copied to `HF_ENDPOINT` (e.g. `https://hf-mirror.com` where Hub mirrors are used).
+- `REGBOT_MIN_TOKEN_OVERLAP`: On the LLM path, minimum **token recall** between each recommendation and cited chunk texts (default `0.06`). Set to `0` to disable dropping low-overlap rows.
 - `REGBOT_CHROMA_ANONYMIZED_TELEMETRY`: Set to `1` to enable Chroma client telemetry; default is off (`0`).
-- `REGBOT_OPENAI_MAX_RETRIES`: Maximum retries for transient OpenAI API errors (default `3`).
+- `REGBOT_OPENAI_MAX_RETRIES`: Retries for the **OpenAI Python client** (used for both OpenAI API and Ollama’s compatible endpoint; default `3`).
 
 Architecture (implemented vs planned)
-- **Core:** Python 3, modular package under `src/regbot/` (ingest, hybrid retrieval, compliance).
-- **Embeddings:** `sentence-transformers` (default `all-MiniLM-L6-v2`).
-- **Vector store:** Chroma persistent store under `REGBOT_STORE/chroma` plus `manifest.json` for BM25 text.
+- **Core:** Python 3, package under `src/regbot/` (ingest, hybrid retrieval, compliance, optional local embedding download helpers).
+- **Embeddings:** `sentence-transformers` + Hugging Face Hub (minimal file set; ONNX-heavy artifacts skipped where possible).
+- **Vector store:** Chroma persistent files under `REGBOT_STORE/chroma` plus `manifest.json` for BM25 text.
 - **Retrieval:** cosine similarity in Chroma + `rank-bm25`, fused via reciprocal rank fusion; optional metadata category filter.
-- **LLM:** OpenAI Chat Completions JSON mode when `OPENAI_API_KEY` is set; offline keyword-style fallback otherwise.
+- **LLM:** **Default:** Ollama (`llama3` or `REGBOT_OLLAMA_MODEL`) via OpenAI-compatible chat completions + JSON parsing. **Optional:** `REGBOT_LLM_PROVIDER=openai` with `OPENAI_API_KEY`. **Fallback:** keyword heuristic if OpenAI is selected without a key, or after LLM errors (e.g. Ollama not running).
 - **UI:** Streamlit (`src/streamlit_app.py`).
-- **Optional / roadmap:** optional LangChain/LlamaIndex adapters on top of the same stores; richer offline evaluation (Ragas, human labels); structured per-recommendation evidence fields.
+- **Optional / roadmap:** LangChain or LlamaIndex adapters on top of the same stores (not required by the current code); richer offline evaluation (Ragas, human labels); structured per-recommendation evidence (e.g. quotes).
 
 Next steps (suggested priorities)
 1. **Real GA4GH corpus**: ingest official PDFs, tune chunk size/overlap and hybrid fusion weights using `eval` + a small **gold query → chunk_id** list (manual or semi-automated).
-2. **Stricter outputs:** `evidence_chunk_ids[]` plus programmatic ID checks, token-overlap filtering on the LLM path (`REGBOT_MIN_TOKEN_OVERLAP`), and retries when grounding/overlap fails. **Next:** richer evidence objects (e.g. optional quotes), stricter refusal when excerpts are insufficient.
+2. **Richer evidence:** optional quoted spans, stricter refusal when retrieved excerpts are insufficient (grounding and token-overlap checks are already in place for the LLM path).
 3. **Contributor experience**: **Done in-repo:** separate **Lint** workflow (Ruff check + format check), `CONTRIBUTING.md`, `.pre-commit-config.yaml`, `pyproject.toml`, `requirements-dev.txt`. **Still open:** optional CI `mypy`, broader type hints, Black-only rules if the team wants them.
-4. **Operational hardening**: **Done in-repo:** Chroma telemetry off by default (`REGBOT_CHROMA_ANONYMIZED_TELEMETRY`), OpenAI client `max_retries` via `REGBOT_OPENAI_MAX_RETRIES`, clear `ValueError` when a PDF yields no extractable text. **Next:** optional request timeouts, Chroma/OpenAI observability hooks.
+4. **Operational hardening**: **Done in-repo:** Chroma telemetry off by default (`REGBOT_CHROMA_ANONYMIZED_TELEMETRY`), client `max_retries` (`REGBOT_OPENAI_MAX_RETRIES`), clear `ValueError` when a PDF yields no extractable text. **Next:** optional request timeouts, observability hooks.
 
 Contributing
 - See **`CONTRIBUTING.md`** for venv setup, **Ruff** lint/format, optional **pre-commit**, and tests.

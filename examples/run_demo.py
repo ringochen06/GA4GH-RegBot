@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run ingest + check using the bundled sample files (no Streamlit)."""
+"""Run ingest + check using the bundled sample files (no Streamlit).
+
+Uses the same CLI as README/DEMO.md. Compliance analysis follows REGBOT_LLM_PROVIDER
+(default: ollama + local llama3) or OpenAI when REGBOT_LLM_PROVIDER=openai and OPENAI_API_KEY is set.
+"""
 
 from __future__ import annotations
 

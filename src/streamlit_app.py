@@ -31,7 +31,9 @@ with st.sidebar:
         help="Where Chroma + manifest.json are written.",
     )
     st.markdown(
-        "Set `OPENAI_API_KEY` locally for full LLM JSON analysis; otherwise a heuristic fallback runs."
+        "**Default:** local [Ollama](https://ollama.com) (`REGBOT_OLLAMA_MODEL`, e.g. `llama3`). "
+        "For OpenAI instead, set `REGBOT_LLM_PROVIDER=openai` and `OPENAI_API_KEY`. "
+        "If the LLM is unreachable, a heuristic fallback runs."
     )
 
 tab_ingest, tab_check = st.tabs(["Ingest policy", "Check consent"])

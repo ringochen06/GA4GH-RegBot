@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,8 +30,23 @@ class _FakeSentenceTransformer:
 
 
 class TestRegBotPipeline(unittest.TestCase):
-    @patch("sentence_transformers.SentenceTransformer", _FakeSentenceTransformer)
-    def test_ingest_retrieve_check_smoke(self) -> None:
+    def setUp(self) -> None:
+        # Default app uses Ollama; this test expects offline heuristic (no running Ollama).
+        self._saved_provider = os.environ.get("REGBOT_LLM_PROVIDER")
+        os.environ["REGBOT_LLM_PROVIDER"] = "openai"
+
+    def tearDown(self) -> None:
+        if self._saved_provider is None:
+            os.environ.pop("REGBOT_LLM_PROVIDER", None)
+        else:
+            os.environ["REGBOT_LLM_PROVIDER"] = self._saved_provider
+
+    @patch("src.regbot.retrieval.load_sentence_transformer")
+    @patch("src.regbot.ingestion.load_sentence_transformer")
+    def test_ingest_retrieve_check_smoke(self, mock_ingest_load, mock_retrieve_load) -> None:
+        fake = _FakeSentenceTransformer()
+        mock_ingest_load.return_value = fake
+        mock_retrieve_load.return_value = fake
         policy = (
             Path(__file__).resolve().parents[1]
             / "examples"

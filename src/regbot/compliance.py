@@ -4,9 +4,24 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    AuthenticationError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
+from openai.types.chat import ChatCompletionMessageParam
 
-from src.regbot.config import DEFAULT_LLM_MODEL, MIN_TOKEN_OVERLAP, OPENAI_MAX_RETRIES
+from src.regbot.config import (
+    DEFAULT_LLM_MODEL,
+    DEFAULT_OLLAMA_MODEL,
+    MIN_TOKEN_OVERLAP,
+    OLLAMA_API_KEY,
+    OPENAI_MAX_RETRIES,
+    llm_provider,
+    ollama_openai_base_url,
+)
 from src.regbot.grounding import (
     allowed_chunk_ids,
     audit_report_grounding,
@@ -81,7 +96,8 @@ def _fallback_report(
         "recommendations": recommendations,
         "citations": citations,
         "notes": (
-            "LLM analysis disabled (no OPENAI_API_KEY). "
+            "LLM analysis disabled: REGBOT_LLM_PROVIDER=openai requires OPENAI_API_KEY. "
+            "Default provider is local Ollama (no cloud key). "
             "This is a lightweight keyword gap check, not legal advice."
         ),
     }
@@ -98,6 +114,29 @@ def _fallback_report(
         "reason": "Keyword fallback does not apply REGBOT_MIN_TOKEN_OVERLAP filtering.",
     }
     out["grounding_attempts"] = 1
+    return out
+
+
+def _fallback_after_api_error(
+    consent_text: str,
+    study_type: str,
+    chunks: List[Dict[str, Any]],
+    *,
+    grounding_strict: bool,
+    detail: str,
+) -> Dict[str, Any]:
+    """Offline heuristic when the LLM request fails (quota, auth, Ollama down, network, etc.)."""
+    out = _fallback_report(
+        consent_text,
+        study_type,
+        chunks,
+        grounding_strict=grounding_strict,
+    )
+    out["notes"] = (
+        "LLM request did not complete; using offline keyword heuristic instead. "
+        "Not legal advice. "
+        f"({detail})"
+    )
     return out
 
 
@@ -141,7 +180,10 @@ def analyze_compliance(
         }
         return empty
 
-    if not api_key:
+    provider = llm_provider()
+    use_ollama = provider == "ollama"
+    use_openai = provider == "openai" and bool(api_key)
+    if not use_ollama and not use_openai:
         return _fallback_report(
             consent_text,
             study_type,
@@ -151,8 +193,16 @@ def analyze_compliance(
 
     allow = allowed_chunk_ids(chunks)
     evidence = _format_evidence(chunks)
-    model_name = model or DEFAULT_LLM_MODEL
-    client = OpenAI(api_key=api_key, max_retries=OPENAI_MAX_RETRIES)
+    if use_ollama:
+        model_name = model or DEFAULT_OLLAMA_MODEL
+        client = OpenAI(
+            base_url=ollama_openai_base_url(),
+            api_key=OLLAMA_API_KEY,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
+    else:
+        model_name = model or DEFAULT_LLM_MODEL
+        client = OpenAI(api_key=api_key, max_retries=OPENAI_MAX_RETRIES)
 
     system = (
         "You are a research compliance assistant for genomic data sharing. "
@@ -188,15 +238,43 @@ def analyze_compliance(
     while attempts < max_attempts:
         attempts += 1
         user = base_user + suffix
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-        )
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        try:
+            try:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+            except BadRequestError:
+                # Ollama / some local models do not support json_object response_format.
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0.2,
+                )
+        except (RateLimitError, AuthenticationError) as e:
+            msg = str(getattr(e, "message", e))[:400]
+            return _fallback_after_api_error(
+                consent_text,
+                study_type,
+                chunks,
+                grounding_strict=grounding_strict,
+                detail=f"{type(e).__name__}: {msg}",
+            )
+        except APIConnectionError as e:
+            msg = str(getattr(e, "message", e))[:400]
+            return _fallback_after_api_error(
+                consent_text,
+                study_type,
+                chunks,
+                grounding_strict=grounding_strict,
+                detail=f"{type(e).__name__}: {msg}",
+            )
         raw = resp.choices[0].message.content or "{}"
         try:
             data = json.loads(raw)

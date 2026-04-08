@@ -14,6 +14,27 @@ CHROMA_SUBDIR = "chroma"
 MANIFEST_NAME = "manifest.json"
 
 
+def llm_provider() -> str:
+    """ollama (default): local Llama / Mistral via Ollama. Set REGBOT_LLM_PROVIDER=openai for OpenAI API."""
+    v = os.getenv("REGBOT_LLM_PROVIDER", "ollama").strip().lower()
+    if v in ("openai", "azure_openai"):
+        return "openai"
+    return "ollama"
+
+
+def ollama_openai_base_url() -> str:
+    """Ollama exposes OpenAI-compatible routes under .../v1 (e.g. http://127.0.0.1:11434/v1)."""
+    base = os.getenv("REGBOT_OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+# Dummy key for Ollama's OpenAI shim (ignored by Ollama).
+OLLAMA_API_KEY = os.getenv("REGBOT_OLLAMA_API_KEY", "ollama")
+DEFAULT_OLLAMA_MODEL = os.getenv("REGBOT_OLLAMA_MODEL", "llama3")
+
+
 def _nonneg_int_env(name: str, default: int) -> int:
     try:
         return max(0, int(os.getenv(name, str(default))))
@@ -21,7 +42,7 @@ def _nonneg_int_env(name: str, default: int) -> int:
         return default
 
 
-# Retries for transient OpenAI API errors (429, 5xx); see OpenAI client max_retries.
+# Retries for transient errors on the OpenAI Python client (OpenAI API or Ollama-compatible URL).
 OPENAI_MAX_RETRIES = _nonneg_int_env("REGBOT_OPENAI_MAX_RETRIES", 3)
 
 
