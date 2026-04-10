@@ -14,6 +14,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from src.main import RegBot
+from src.regbot.compliance import chat_followup_policy_qa
 
 st.set_page_config(page_title="GA4GH-RegBot", layout="wide")
 load_dotenv()
@@ -36,7 +37,7 @@ with st.sidebar:
         "If the LLM is unreachable, a heuristic fallback runs."
     )
 
-tab_ingest, tab_check = st.tabs(["Ingest policy", "Check consent"])
+tab_ingest, tab_check, tab_chat = st.tabs(["Ingest policy", "Check consent", "Ask follow-up"])
 
 with tab_ingest:
     uploaded = st.file_uploader("Policy PDF or .txt", type=["pdf", "txt"])
@@ -69,11 +70,14 @@ with tab_check:
     top_k = st.slider("Retrieved chunks", min_value=3, max_value=16, value=8)
     if st.button("Analyze", type="primary"):
         bot = RegBot(store_dir=store_dir)
-        report = bot.check_compliance(
+        report, chunks = bot.compliance_report_and_chunks(
             consent_text,
             category=filter_cat.strip() or None,
             top_k=int(top_k),
         )
+        st.session_state["last_chunks"] = chunks
+        st.session_state["last_consent"] = consent_text
+        st.session_state["chat_messages"] = []
         st.subheader("Report")
         st.json(report)
         st.download_button(
@@ -82,3 +86,36 @@ with tab_check:
             file_name="regbot_report.json",
             mime="application/json",
         )
+
+with tab_chat:
+    st.caption(
+        "Uses the **same retrieved policy chunks** as your last **Analyze** on the Check consent tab. "
+        "Exploratory Q&A only — not programmatically grounded like the JSON report. Not legal advice."
+    )
+    if not st.session_state.get("last_chunks"):
+        st.info("Run **Analyze** on **Check consent** first to load chunks into this session.")
+    else:
+        for msg in st.session_state.get("chat_messages") or []:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+        # st.chat_input cannot be placed inside st.tabs (Streamlit API); use form + text input instead.
+        with st.form("followup_form", clear_on_submit=True):
+            prompt = st.text_input(
+                "Question about the retrieved policy context",
+                placeholder="Type a question and click Send…",
+                label_visibility="collapsed",
+            )
+            send = st.form_submit_button("Send")
+        if send and prompt.strip():
+            st.session_state.setdefault("chat_messages", []).append(
+                {"role": "user", "content": prompt.strip()}
+            )
+            bot = RegBot(store_dir=store_dir)
+            reply = chat_followup_policy_qa(
+                st.session_state["last_chunks"],
+                st.session_state.get("last_consent") or "",
+                st.session_state["chat_messages"],
+                api_key=bot.api_key,
+            )
+            st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
+            st.rerun()

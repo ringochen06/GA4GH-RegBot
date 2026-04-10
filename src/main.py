@@ -90,6 +90,28 @@ class RegBot:
             return []
         return r.retrieve(user_query, top_k=top_k, category=category)
 
+    def compliance_report_and_chunks(
+        self,
+        user_consent_form: str,
+        *,
+        category: Optional[str] = None,
+        top_k: int = 8,
+    ) -> tuple[dict, List[Dict[str, Any]]]:
+        """Same retrieval + compliance as check_compliance; also returns retrieved chunks."""
+        study = detect_study_type(user_consent_form)
+        chunks = self.retrieve_relevant_clauses(
+            user_consent_form,
+            top_k=top_k,
+            category=category,
+        )
+        report = analyze_compliance(
+            user_consent_form,
+            chunks,
+            study_type=study,
+            api_key=self.api_key,
+        )
+        return report, chunks
+
     def check_compliance(
         self,
         user_consent_form: str,
@@ -97,18 +119,12 @@ class RegBot:
         category: Optional[str] = None,
         top_k: int = 8,
     ) -> dict:
-        study = detect_study_type(user_consent_form)
-        chunks = self.retrieve_relevant_clauses(
+        report, _ = self.compliance_report_and_chunks(
             user_consent_form,
-            top_k=top_k,
             category=category,
+            top_k=top_k,
         )
-        return analyze_compliance(
-            user_consent_form,
-            chunks,
-            study_type=study,
-            api_key=self.api_key,
-        )
+        return report
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:

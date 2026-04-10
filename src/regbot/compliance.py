@@ -28,6 +28,7 @@ from src.regbot.grounding import (
     filter_recommendations_by_token_overlap,
     normalize_recommendations,
 )
+from src.regbot.study_type import detect_study_type
 
 
 def _format_evidence(chunks: List[Dict[str, Any]], max_chars: int = 12000) -> str:
@@ -365,3 +366,78 @@ def analyze_compliance(
         return out
 
     return out
+
+
+def chat_followup_policy_qa(
+    chunks: List[Dict[str, Any]],
+    consent_text: str,
+    messages: List[Dict[str, str]],
+    *,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> str:
+    """
+    Multi-turn Q&A using only retrieved chunks as policy evidence (same headers as compliance).
+    ``messages`` are prior turns: {"role": "user"|"assistant", "content": "..."}.
+    Does not replace programmatic JSON grounding; for exploratory follow-up only. Not legal advice.
+    """
+    if not chunks:
+        return "No policy chunks available. Run **Analyze** on the Check consent tab first."
+
+    provider = llm_provider()
+    use_ollama = provider == "ollama"
+    use_openai = provider == "openai" and bool(api_key)
+    if not use_ollama and not use_openai:
+        return (
+            "Chat needs an LLM: start Ollama or set REGBOT_LLM_PROVIDER=openai with OPENAI_API_KEY."
+        )
+
+    if use_ollama:
+        model_name = model or DEFAULT_OLLAMA_MODEL
+        client = OpenAI(
+            base_url=ollama_openai_base_url(),
+            api_key=OLLAMA_API_KEY,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
+    else:
+        model_name = model or DEFAULT_LLM_MODEL
+        client = OpenAI(api_key=api_key, max_retries=OPENAI_MAX_RETRIES)
+
+    evidence = _format_evidence(chunks)
+    study_guess = detect_study_type(consent_text)
+    system = (
+        "You are a research compliance assistant for genomic data sharing. Not legal advice.\n\n"
+        "Two kinds of sources:\n"
+        "(1) GA4GH/policy requirements: use ONLY the POLICY EXCERPTS below. "
+        "Cite chunk_id from [chunk_id=...] headers when you reference policy text.\n"
+        "(2) The participant consent / data-use text: use CONSENT_OR_DATA_USE_TEXT below. "
+        "For **study type** as used in the compliance JSON report, use this exact pipeline label "
+        "(keyword heuristic, same as field `study_type` in Check consent):\n"
+        f"STUDY_TYPE_GUESS: {study_guess}\n"
+        "If the user asks what the study type is, answer with STUDY_TYPE_GUESS and say it matches "
+        "the automated keyword classifier; optionally quote a short supporting phrase from the consent text. "
+        "Do not invent a different category (e.g. 'research study') unless the user asks for informal wording "
+        "— in that case, still mention STUDY_TYPE_GUESS first.\n\n"
+        f"POLICY EXCERPTS:\n{evidence}\n\n"
+        "CONSENT_OR_DATA_USE_TEXT:\n"
+        f"{consent_text.strip()}"
+    )
+
+    history: List[ChatCompletionMessageParam] = [{"role": "system", "content": system}]
+    for m in messages[-24:]:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        history.append({"role": role, "content": content})
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=history,
+            temperature=0.3,
+        )
+    except (RateLimitError, AuthenticationError, APIConnectionError, BadRequestError) as e:
+        return f"Could not reach the LLM: {type(e).__name__}: {str(e)[:400]}"
+
+    return (resp.choices[0].message.content or "").strip() or "(empty reply)"
